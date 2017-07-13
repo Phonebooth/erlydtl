@@ -1,9 +1,12 @@
 %% -*- mode: erlang -*-
 {application, erlydtl,
- [{description, "ErlyDTL compiles the Django Template Language to Erlang bytecode"},
-  {vsn, "0.7.0"},
-  {modules, [
-            ]},
-  {applications, [kernel, stdlib, compiler, syntax_tools]},
-  {registered, []}
+ [{description, "Django Template Language for Erlang"},
+  {vsn, "0.12.1"},
+  {modules, []},
+  {applications, [kernel, stdlib, compiler, syntax_tools, merl]},
+  {registered, []},
+  {maintainers, ["Andreas Stenius (@kaos)", "Heinz N. Gies"]},
+  {licenses,["MIT"]},
+  {links,[{"Github",
+           "https://github.com/erlydtl/erlydtl"}]}
  ]}.

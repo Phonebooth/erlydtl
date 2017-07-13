@@ -1,15 +1,16 @@
+%%%%% THIS IS A SLEX GENERATED FILE %%%%%
+
 %%%-------------------------------------------------------------------
-%%% File:      erlydtl_scanner.erl
-%%% @author    Roberto Saccon <rsaccon@gmail.com> [http://rsaccon.com]
-%%% @author    Evan Miller <emmiller@gmail.com>
-%%% @copyright 2008 Roberto Saccon, Evan Miller
-%%% @doc 
-%%% Template language scanner
-%%% @end  
+%%% File:      erlydtl_scanner.slex
+%%% @author    Andreas Stenius <kaos@astekk.se>
+%%% @copyright 2013 Andreas Stenius
+%%% @doc
+%%% erlydtl scanner
+%%% @end
 %%%
 %%% The MIT License
 %%%
-%%% Copyright (c) 2007 Roberto Saccon, Evan Miller
+%%% Copyright (c) 2013 Andreas Stenius
 %%%
 %%% Permission is hereby granted, free of charge, to any person obtaining a copy
 %%% of this software and associated documentation files (the "Software"), to deal
@@ -29,279 +30,564 @@
 %%% OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 %%% THE SOFTWARE.
 %%%
-%%% @since 2007-11-11 by Roberto Saccon, Evan Miller
+%%% @since 2013-11-05 by Andreas Stenius
+%%%
+%%% Rules based on the original erlydtl_scanner by Robert Saccon and Evan Miller.
 %%%-------------------------------------------------------------------
 -module(erlydtl_scanner).
--author('rsaccon@gmail.com').
--author('emmiller@gmail.com').
 
--export([scan/1]). 
+%% This file was generated 2016-05-28 20:22:41 UTC by slex 0.2.1-2-g7814678.
+%% http://github.com/erlydtl/slex
+-slex_source(["src/erlydtl_scanner.slex"]).
 
+-export([scan/1, scan/4]).
 
-%%====================================================================
-%% API
-%%====================================================================
-%%--------------------------------------------------------------------
-%% @spec scan(T::template()) -> {ok, S::tokens()} | {error, Reason}
-%% @type template() = string() | binary(). Template to parse
-%% @type tokens() = [tuple()].
-%% @doc Scan the template string T and return the a token list or
-%% an error.
-%% @end
-%%--------------------------------------------------------------------
-scan(Template) ->
-    scan(Template, [], {1, 1}, in_text).
+-compile(nowarn_unused_vars).
 
-scan([], Scanned, _, in_text) ->
-    {ok, lists:reverse(lists:map(
-                fun
-                    ({identifier, Pos, String}) ->
-                        RevString = lists:reverse(String),
-                        Keywords = [
-                            "autoescape", "endautoescape", 
+-export([resume/1, format_error/1]).
 
-                            "block", "endblock", 
+-record(scanner_state,
+	{template = [], scanned = [], pos = {1, 1},
+	 state = in_text}).
 
-                            "comment", "endcomment", 
+resume(#scanner_state{template = Template,
+		      scanned = Scanned, pos = Pos, state = State}) ->
+    scan(Template, Scanned, Pos, State).
 
-                            %TODO "csrf_token",
-                            
-                            "cycle", 
-                            
-                            "extends", 
+return_error(Error, P, T, S, St) ->
+    {error, {P, erlydtl_scanner, Error},
+     #scanner_state{template = T,
+		    scanned = post_process(S, err), pos = P, state = St}}.
 
-                            "filter", "endfilter",
+return_error(Error, P) ->
+    {error, {P, erlydtl_scanner, Error}}.
 
-                            "firstof",
+to_atom(L) when is_list(L) -> list_to_atom(L).
 
-                            "for", "in", "empty", "endfor", 
+to_keyword(L, P) -> {to_atom(L ++ "_keyword"), P, L}.
 
-                            "if", "else", "endif", "not", "or", "and", 
+atomize(L, T) -> setelement(3, T, to_atom(L)).
 
-                            %TODO "ifchanged", 
-                            
-                            "ifequal", "endifequal", 
-
-                            "ifnotequal", "endifnotequal",
-
-                            "include", "only",
-
-                            "now", 
-
-                            %TODO "regroup", 
-                            
-                            "spaceless", "endspaceless", 
-                            
-                            "ssi", "parsed",
-                            
-                            "templatetag", "openblock", "closeblock", "openvariable", "closevariable", "openbrace", "closebrace", "opencomment", "closecomment",
-
-                            % "url", - implemented as custom tag
-
-                            "widthratio",
-
-                            "call", "with", "endwith",
-                            
-                            "trans", "blocktrans", "endblocktrans", "noop"
-                        ], 
-                        Type = case lists:member(RevString, Keywords) of
-                            true ->
-                                list_to_atom(RevString ++ "_keyword");
-                            _ ->
-                                identifier
-                        end,
-                        {Type, Pos, list_to_atom(RevString)};
-                    ({Category, Pos, String}) when  Category =:= string; 
-                                                    Category =:= string_literal; 
-                                                    Category =:= number_literal ->
-                        {Category, Pos, lists:reverse(String)};
-                    (Other) -> Other
-                end, Scanned))};
-
-scan([], _Scanned, _, {in_comment, _}) ->
-    {error, "Reached end of file inside a comment."};
-
-scan([], _Scanned, _, _) ->
-    {error, "Reached end of file inside a code block."};
-
-scan("<!--{{" ++ T, Scanned, {Row, Column}, in_text) ->
-    scan(T, [{open_var, {Row, Column}, '<!--{{'} | Scanned], {Row, Column + length("<!--{{")}, {in_code, "}}-->"});
-
-scan("{{" ++ T, Scanned, {Row, Column}, in_text) ->
-    scan(T, [{open_var, {Row, Column}, '{{'} | Scanned], {Row, Column + length("{{")}, {in_code, "}}"});
-
-scan("<!--{#" ++ T, Scanned, {Row, Column}, in_text) ->
-    scan(T, Scanned, {Row, Column + length("<!--{#")}, {in_comment, "#}-->"});
-
-scan("{#" ++ T, Scanned, {Row, Column}, in_text) ->
-    scan(T, Scanned, {Row, Column + length("{#")}, {in_comment, "#}"});
-
-scan("#}-->" ++ T, Scanned, {Row, Column}, {in_comment, "#}-->"}) ->
-    scan(T, Scanned, {Row, Column + length("#}-->")}, in_text);
-
-scan("#}" ++ T, Scanned, {Row, Column}, {in_comment, "#}"}) ->
-    scan(T, Scanned, {Row, Column + length("#}")}, in_text);
-
-scan("<!--{%" ++ T, Scanned, {Row, Column}, in_text) ->
-    scan(T, [{open_tag, {Row, Column}, '<!--{%'} | Scanned], 
-        {Row, Column + length("<!--{%")}, {in_code, "%}-->"});
-
-scan("{%" ++ T, Scanned, {Row, Column}, in_text) ->
-    scan(T, [{open_tag, {Row, Column}, '{%'} | Scanned], 
-        {Row, Column + length("{%")}, {in_code, "%}"});
-
-scan([_ | T], Scanned, {Row, Column}, {in_comment, Closer}) ->
-    scan(T, Scanned, {Row, Column + 1}, {in_comment, Closer});
-
-scan("\n" ++ T, Scanned, {Row, Column}, in_text) ->
-    scan(T, append_text_char(Scanned, {Row, Column}, $\n), {Row + 1, 1}, in_text);
-
-scan([H | T], Scanned, {Row, Column}, in_text) ->
-    scan(T, append_text_char(Scanned, {Row, Column}, H), {Row, Column + 1}, in_text);
-
-scan("\"" ++ T, Scanned, {Row, Column}, {in_code, Closer}) ->
-    scan(T, [{string_literal, {Row, Column}, "\""} | Scanned], {Row, Column + 1}, {in_double_quote, Closer});
-
-scan("\"" ++ T, Scanned, {Row, Column}, {in_identifier, Closer}) ->
-    scan(T, [{string_literal, {Row, Column}, "\""} | Scanned], {Row, Column + 1}, {in_double_quote, Closer});
-
-scan("\'" ++ T, Scanned, {Row, Column}, {in_code, Closer}) ->
-    scan(T, [{string_literal, {Row, Column}, "\""} | Scanned], {Row, Column + 1}, {in_single_quote, Closer});
-
-scan("\'" ++ T, Scanned, {Row, Column}, {in_identifier, Closer}) ->
-    scan(T, [{string_literal, {Row, Column}, "\""} | Scanned], {Row, Column + 1}, {in_single_quote, Closer});
-
-scan([$\\ | T], Scanned, {Row, Column}, {in_double_quote, Closer}) ->
-    scan(T, append_char(Scanned, $\\), {Row, Column + 1}, {in_double_quote_slash, Closer});
-
-scan([H | T], Scanned, {Row, Column}, {in_double_quote_slash, Closer}) ->
-    scan(T, append_char(Scanned, H), {Row, Column + 1}, {in_double_quote, Closer});
-
-scan([$\\ | T], Scanned, {Row, Column}, {in_single_quote, Closer}) ->
-    scan(T, append_char(Scanned, $\\), {Row, Column + 1}, {in_single_quote_slash, Closer});
-
-scan([H | T], Scanned, {Row, Column}, {in_single_quote_slash, Closer}) ->
-    scan(T, append_char(Scanned, H), {Row, Column + 1}, {in_single_quote, Closer});
-
-% end quote
-scan("\"" ++ T, Scanned, {Row, Column}, {in_double_quote, Closer}) ->
-    scan(T, append_char(Scanned, 34), {Row, Column + 1}, {in_code, Closer});
-
-% treat single quotes the same as double quotes
-scan("\'" ++ T, Scanned, {Row, Column}, {in_single_quote, Closer}) ->
-    scan(T, append_char(Scanned, 34), {Row, Column + 1}, {in_code, Closer});
-
-scan([H | T], Scanned, {Row, Column}, {in_double_quote, Closer}) ->
-    scan(T, append_char(Scanned, H), {Row, Column + 1}, {in_double_quote, Closer});
-
-scan([H | T], Scanned, {Row, Column}, {in_single_quote, Closer}) ->
-    scan(T, append_char(Scanned, H), {Row, Column + 1}, {in_single_quote, Closer});
-
-
-scan("}}-->" ++ T, Scanned, {Row, Column}, {_, "}}-->"}) ->
-    scan(T, [{close_var, {Row, Column}, '}}-->'} | Scanned], 
-        {Row, Column + length("}}-->")}, in_text);
-
-scan("}}" ++ T, Scanned, {Row, Column}, {_, "}}"}) ->
-    scan(T, [{close_var, {Row, Column}, '}}'} | Scanned], {Row, Column + 2}, in_text);
-
-scan("%}-->" ++ T, Scanned, {Row, Column}, {_, "%}-->"}) ->
-    scan(T, [{close_tag, {Row, Column}, '%}-->'} | Scanned], 
-        {Row, Column + length("%}-->")}, in_text);
-
-scan("%}" ++ T, Scanned, {Row, Column}, {_, "%}"}) ->
-    scan(T, [{close_tag, {Row, Column}, '%}'} | Scanned], 
-        {Row, Column + 2}, in_text);
-
-scan("==" ++ T, Scanned, {Row, Column}, {_, Closer}) ->
-    scan(T, [{'==', {Row, Column}} | Scanned], {Row, Column + 2}, {in_code, Closer});
-
-scan("!=" ++ T, Scanned, {Row, Column}, {_, Closer}) ->
-    scan(T, [{'!=', {Row, Column}} | Scanned], {Row, Column + 2}, {in_code, Closer});
-
-scan(">=" ++ T, Scanned, {Row, Column}, {_, Closer}) ->
-    scan(T, [{'>=', {Row, Column}} | Scanned], {Row, Column + 2}, {in_code, Closer});
-
-scan("<=" ++ T, Scanned, {Row, Column}, {_, Closer}) ->
-    scan(T, [{'<=', {Row, Column}} | Scanned], {Row, Column + 2}, {in_code, Closer});
-
-scan("<" ++ T, Scanned, {Row, Column}, {_, Closer}) ->
-    scan(T, [{'<', {Row, Column}} | Scanned], {Row, Column + 1}, {in_code, Closer});
-
-scan(">" ++ T, Scanned, {Row, Column}, {_, Closer}) ->
-    scan(T, [{'>', {Row, Column}} | Scanned], {Row, Column + 1}, {in_code, Closer});
-
-scan("("++ T, Scanned, {Row, Column}, {_, Closer}) ->
-    scan(T, [{'(', {Row, Column}} | Scanned], {Row, Column + 1}, {in_code, Closer});
-
-scan(")" ++ T, Scanned, {Row, Column}, {_, Closer}) ->
-    scan(T, [{')', {Row, Column}} | Scanned], {Row, Column + 1}, {in_code, Closer});
-
-scan("," ++ T, Scanned, {Row, Column}, {_, Closer}) ->
-    scan(T, [{',', {Row, Column}} | Scanned], {Row, Column + 1}, {in_code, Closer});
-
-scan("|" ++ T, Scanned, {Row, Column}, {_, Closer}) ->
-    scan(T, [{'|', {Row, Column}} | Scanned], {Row, Column + 1}, {in_code, Closer});
-
-scan("=" ++ T, Scanned, {Row, Column}, {_, Closer}) ->
-    scan(T, [{'=', {Row, Column}} | Scanned], {Row, Column + 1}, {in_code, Closer});
-
-scan(":" ++ T, Scanned, {Row, Column}, {_, Closer}) ->
-    scan(T, [{':', {Row, Column}} | Scanned], {Row, Column + 1}, {in_code, Closer});
-
-scan("." ++ T, Scanned, {Row, Column}, {_, Closer}) ->
-    scan(T, [{'.', {Row, Column}} | Scanned], {Row, Column + 1}, {in_code, Closer});
-
-scan("_(" ++ T, Scanned, {Row, Column}, {in_code, Closer}) ->
-    scan(T, lists:reverse([{'_', {Row, Column}}, {'(', {Row, Column + 1}}], Scanned), {Row, Column + 2}, {in_code, Closer});
-
-scan(" " ++ T, Scanned, {Row, Column}, {_, Closer}) ->
-    scan(T, Scanned, {Row, Column + 1}, {in_code, Closer});
-
-
-scan([H | T], Scanned, {Row, Column}, {in_code, Closer}) ->
-    case char_type(H) of
-        letter_underscore ->
-            scan(T, [{identifier, {Row, Column}, [H]} | Scanned], {Row, Column + 1}, {in_identifier, Closer});
-        digit ->
-            scan(T, [{number_literal, {Row, Column}, [H]} | Scanned], {Row, Column + 1}, {in_number, Closer});
-        _ ->
-            {error, {Row, ?MODULE, lists:concat(["Illegal character in column ", Column])}}
+is_keyword(Class, {_, _, L} = T) ->
+    L1 = lists:reverse(L),
+    case is_keyword(Class, L1) of
+      true -> to_keyword(L1, element(2, T));
+      false -> atomize(L1, T)
     end;
+is_keyword([C | Cs], L) ->
+    is_keyword(C, L) orelse is_keyword(Cs, L);
+is_keyword(all, L) -> is_keyword([any, open, close], L);
+is_keyword(open_tag, L) -> is_keyword([any, open], L);
+is_keyword(close_tag, L) -> is_keyword([any, close], L);
+is_keyword(any, "in") -> true;
+is_keyword(any, "not") -> true;
+is_keyword(any, "or") -> true;
+is_keyword(any, "and") -> true;
+is_keyword(any, "as") -> true;
+is_keyword(any, "by") -> true;
+is_keyword(any, "with") -> true;
+is_keyword(any, "from") -> true;
+is_keyword(any, "count") -> true;
+is_keyword(any, "context") -> true;
+is_keyword(any, "noop") -> true;
+is_keyword(any, "trimmed") -> true;
+is_keyword(close, "only") -> true;
+is_keyword(close, "parsed") -> true;
+is_keyword(close, "silent") -> true;
+is_keyword(close, "reversed") -> true;
+is_keyword(close, "openblock") -> true;
+is_keyword(close, "closeblock") -> true;
+is_keyword(close, "openvariable") -> true;
+is_keyword(close, "closevariable") -> true;
+is_keyword(close, "openbrace") -> true;
+is_keyword(close, "closebrace") -> true;
+is_keyword(close, "opencomment") -> true;
+is_keyword(close, "closecomment") -> true;
+is_keyword(open, "autoescape") -> true;
+is_keyword(open, "endautoescape") -> true;
+is_keyword(open, "block") -> true;
+is_keyword(open, "endblock") -> true;
+is_keyword(open, "language") -> true;
+is_keyword(open, "endlanguage") -> true;
+is_keyword(open, "comment") -> true;
+is_keyword(open, "endcomment") -> true;
+is_keyword(open, "cycle") -> true;
+is_keyword(open, "extends") -> true;
+is_keyword(open, "filter") -> true;
+is_keyword(open, "endfilter") -> true;
+is_keyword(open, "firstof") -> true;
+is_keyword(open, "for") -> true;
+is_keyword(open, "empty") -> true;
+is_keyword(open, "endfor") -> true;
+is_keyword(open, "if") -> true;
+is_keyword(open, "elif") -> true;
+is_keyword(open, "else") -> true;
+is_keyword(open, "endif") -> true;
+is_keyword(open, "ifchanged") -> true;
+is_keyword(open, "endifchanged") -> true;
+is_keyword(open, "ifequal") -> true;
+is_keyword(open, "endifequal") -> true;
+is_keyword(open, "ifnotequal") -> true;
+is_keyword(open, "endifnotequal") -> true;
+is_keyword(open, "include") -> true;
+is_keyword(open, "now") -> true;
+is_keyword(open, "regroup") -> true;
+is_keyword(open, "endregroup") -> true;
+is_keyword(open, "spaceless") -> true;
+is_keyword(open, "endspaceless") -> true;
+is_keyword(open, "ssi") -> true;
+is_keyword(open, "templatetag") -> true;
+is_keyword(open, "widthratio") -> true;
+is_keyword(open, "call") -> true;
+is_keyword(open, "endwith") -> true;
+is_keyword(open, "trans") -> true;
+is_keyword(open, "blocktrans") -> true;
+is_keyword(open, "endblocktrans") -> true;
+is_keyword(open, "load") -> true;
+is_keyword(open, "plural") -> true;
+is_keyword(_, _) -> false.
 
-scan([H | T], Scanned, {Row, Column}, {in_number, Closer}) ->
-    case char_type(H) of
-        digit ->
-            scan(T, append_char(Scanned, H), {Row, Column + 1}, {in_number, Closer});
-        _ ->
-            {error, {Row, ?MODULE, lists:concat(["Illegal character in column ", Column])}}
+format_error({illegal_char, C}) ->
+    io_lib:format("Illegal character '~s'", [[C]]);
+format_error({eof, Where}) ->
+    io_lib:format("Unexpected end of file ~s",
+		  [format_where(Where)]).
+
+format_where(in_comment) -> "in comment";
+format_where(in_code) -> "in code block".
+
+scan(Template) when is_list(Template) ->
+    scan(Template, [], {1, 1}, in_text);
+scan(Template) when is_binary(Template) ->
+    scan(binary_to_list(Template)).
+
+scan("{{" ++ T, S, {R, C} = P, in_text) ->
+    scan(T,
+	 [{open_var, P, "{{"} | post_process(S, open_var)],
+	 {R, C + 2}, {in_code, "}}"});
+scan("{%" ++ T, S, {R, C} = P, in_text) ->
+    scan(T,
+	 [{open_tag, P, "{%"} | post_process(S, open_tag)],
+	 {R, C + 2}, {in_code, "%}"});
+scan("<!--{{" ++ T, S, {R, C} = P, in_text) ->
+    scan(T,
+	 [{open_var, P, "<!--{{"} | post_process(S, open_var)],
+	 {R, C + 6}, {in_code, "}}-->"});
+scan("<!--{%" ++ T, S, {R, C} = P, in_text) ->
+    scan(T,
+	 [{open_tag, P, "<!--{%"} | post_process(S, open_tag)],
+	 {R, C + 6}, {in_code, "%}-->"});
+scan("{#" ++ T, S, {R, C}, in_text) ->
+    scan(T, S, {R, C + 2}, {in_comment, "#}"});
+scan("<!--{#" ++ T, S, {R, C}, in_text) ->
+    scan(T, S, {R, C + 6}, {in_comment, "#}-->"});
+scan("#}-->" ++ T, S, {R, C}, {_, "#}-->"}) ->
+    scan(T, S, {R, C + 5}, in_text);
+scan("#}" ++ T, S, {R, C}, {_, "#}"}) ->
+    scan(T, S, {R, C + 2}, in_text);
+scan([H | T], S, {R, C} = P, {in_comment, E} = St) ->
+    scan(T,
+	 case S of
+	   [{comment_tag, _, L} = M | Ss] ->
+	       [setelement(3, M, [H | L]) | Ss];
+	   _ ->
+	       [{comment_tag, P, [H]} | post_process(S, comment_tag)]
+	 end,
+	 case H of
+	   $\n -> {R + 1, 1};
+	   _ -> {R, C + 1}
+	 end,
+	 St);
+scan([H | T], S, {R, C} = P, in_text = St) ->
+    scan(T,
+	 case S of
+	   [{string, _, L} = M | Ss] ->
+	       [setelement(3, M, [H | L]) | Ss];
+	   _ -> [{string, P, [H]} | post_process(S, string)]
+	 end,
+	 case H of
+	   $\n -> {R + 1, 1};
+	   _ -> {R, C + 1}
+	 end,
+	 St);
+scan("\"" ++ T, S, {R, C} = P, {in_code, E}) ->
+    scan(T,
+	 [{string_literal, P, "\""} | post_process(S,
+						   string_literal)],
+	 {R, C + 1}, {in_double_quote, E});
+scan("'" ++ T, S, {R, C} = P, {in_code, E}) ->
+    scan(T,
+	 [{string_literal, P, "\""} | post_process(S,
+						   string_literal)],
+	 {R, C + 1}, {in_single_quote, E});
+scan("\"" ++ T, S, {R, C} = P, {in_double_quote, E}) ->
+    scan(T,
+	 case S of
+	   [{string_literal, _, L} = M | Ss] ->
+	       [setelement(3, M, "\"" ++ L) | Ss];
+	   _ ->
+	       [{string_literal, P, "\""} | post_process(S,
+							 string_literal)]
+	 end,
+	 {R, C + 1}, {in_code, E});
+scan("'" ++ T, S, {R, C} = P, {in_single_quote, E}) ->
+    scan(T,
+	 case S of
+	   [{string_literal, _, L} = M | Ss] ->
+	       [setelement(3, M, "\"" ++ L) | Ss];
+	   _ ->
+	       [{string_literal, P, "\""} | post_process(S,
+							 string_literal)]
+	 end,
+	 {R, C + 1}, {in_code, E});
+scan("\\" ++ T, S, {R, C} = P, {in_double_quote, E}) ->
+    scan(T,
+	 case S of
+	   [{string_literal, _, L} = M | Ss] ->
+	       [setelement(3, M, "\\" ++ L) | Ss];
+	   _ ->
+	       [{string_literal, P, "\\"} | post_process(S,
+							 string_literal)]
+	 end,
+	 {R, C + 1}, {in_double_quote_escape, E});
+scan("\\" ++ T, S, {R, C} = P, {in_single_quote, E}) ->
+    scan(T,
+	 case S of
+	   [{string_literal, _, L} = M | Ss] ->
+	       [setelement(3, M, "\\" ++ L) | Ss];
+	   _ ->
+	       [{string_literal, P, "\\"} | post_process(S,
+							 string_literal)]
+	 end,
+	 {R, C + 1}, {in_single_quote_escape, E});
+scan([H | T], S, {R, C} = P,
+     {in_double_quote, E} = St) ->
+    scan(T,
+	 case S of
+	   [{string_literal, _, L} = M | Ss] ->
+	       [setelement(3, M, [H | L]) | Ss];
+	   _ ->
+	       [{string_literal, P, [H]} | post_process(S,
+							string_literal)]
+	 end,
+	 case H of
+	   $\n -> {R + 1, 1};
+	   _ -> {R, C + 1}
+	 end,
+	 St);
+scan([H | T], S, {R, C} = P,
+     {in_single_quote, E} = St) ->
+    scan(T,
+	 case S of
+	   [{string_literal, _, L} = M | Ss] ->
+	       [setelement(3, M, [H | L]) | Ss];
+	   _ ->
+	       [{string_literal, P, [H]} | post_process(S,
+							string_literal)]
+	 end,
+	 case H of
+	   $\n -> {R + 1, 1};
+	   _ -> {R, C + 1}
+	 end,
+	 St);
+scan([H | T], S, {R, C} = P,
+     {in_double_quote_escape, E}) ->
+    scan(T,
+	 case S of
+	   [{string_literal, _, L} = M | Ss] ->
+	       [setelement(3, M, [H | L]) | Ss];
+	   _ ->
+	       [{string_literal, P, [H]} | post_process(S,
+							string_literal)]
+	 end,
+	 case H of
+	   $\n -> {R + 1, 1};
+	   _ -> {R, C + 1}
+	 end,
+	 {in_double_quote, E});
+scan([H | T], S, {R, C} = P,
+     {in_single_quote_escape, E}) ->
+    scan(T,
+	 case S of
+	   [{string_literal, _, L} = M | Ss] ->
+	       [setelement(3, M, [H | L]) | Ss];
+	   _ ->
+	       [{string_literal, P, [H]} | post_process(S,
+							string_literal)]
+	 end,
+	 case H of
+	   $\n -> {R + 1, 1};
+	   _ -> {R, C + 1}
+	 end,
+	 {in_single_quote, E});
+scan("}}-->" ++ T, S, {R, C} = P, {_, "}}-->"}) ->
+    scan(T,
+	 [{close_var, P, "}}-->"} | post_process(S, close_var)],
+	 {R, C + 5}, in_text);
+scan("%}-->" ++ T, S, {R, C} = P, {_, "%}-->"}) ->
+    scan(T,
+	 [{close_tag, P, "%}-->"} | post_process(S, close_tag)],
+	 {R, C + 5}, in_text);
+scan("}}" ++ T, S, {R, C} = P, {_, "}}"}) ->
+    scan(T,
+	 [{close_var, P, "}}"} | post_process(S, close_var)],
+	 {R, C + 2}, in_text);
+scan("%}" ++ T, S, {R, C} = P, {_, "%}"} = St) ->
+    case S of
+      [{identifier, _, "mitabrev"}, {open_tag, _, '{%'}
+       | Ss] ->
+	  scan(T, [{string, {R, C + 2}, ""} | Ss], {R, C + 2},
+	       {in_verbatim, undefined});
+      [{identifier, _, Tag}, {identifier, _, verbatim},
+       {open_tag, _, '{%'}
+       | Ss] ->
+	  scan(T, [{string, {R, C + 2}, ""} | Ss], {R, C + 2},
+	       {in_verbatim, Tag});
+      _ ->
+	  scan(T,
+	       [{close_tag, P, "%}"} | post_process(S, close_tag)],
+	       {R, C + 2}, in_text)
     end;
+scan("{%" ++ T, S, {R, C} = P, {in_verbatim, E} = St) ->
+    scan(T, S, {R, C + 2}, {in_verbatim_code, {E, "%{"}});
+scan(" " ++ T, S, {R, C} = P,
+     {in_verbatim_code, E} = St) ->
+    {Tag, Backtrack} = E,
+    scan(T, S, {R, C + 1},
+	 {in_verbatim_code, {Tag, [$\s | Backtrack]}});
+scan("endverbatim%}" ++ T, S, {R, C} = P,
+     {in_verbatim_code, E} = St)
+    when element(1, E) =:= undefined ->
+    scan(T, S, {R, C + 13}, in_text);
+scan("endverbatim " ++ T, S, {R, C} = P,
+     {in_verbatim_code, E} = St) ->
+    {Tag, Backtrack} = E,
+    scan(T, S, {R, C + 12},
+	 {in_endverbatim_code,
+	  {Tag, lists:reverse("endverbatim ", Backtrack), ""}});
+scan(" " ++ T, S, {R, C} = P,
+     {in_endverbatim_code, E} = St)
+    when element(3, E) =:= "" ->
+    {Tag, Backtrack, EndTag} = E,
+    scan(T, S, {R, C + 1},
+	 {in_endverbatim_code,
+	  {Tag, [$\s | Backtrack], EndTag}});
+scan([H | T], S, {R, C} = P,
+     {in_endverbatim_code, E} = St)
+    when H >= $a andalso H =< $z orelse
+	   H >= $0 andalso H =< $9 orelse H =:= $_ ->
+    {Tag, Backtrack, EndTag} = E,
+    scan(T, S, {R, C + 1},
+	 {in_endverbatim_code,
+	  {Tag, [H | Backtrack], [H | EndTag]}});
+scan(" " ++ T, S, {R, C} = P,
+     {in_endverbatim_code, E} = St)
+    when element(1, E) =:= element(3, E) ->
+    {Tag, Backtrack, Tag} = E,
+    scan(T, S, {R, C + 1},
+	 {in_endverbatim_code, {Tag, [$\s | Backtrack], Tag}});
+scan("%}" ++ T, S, {R, C} = P,
+     {in_endverbatim_code, E} = St)
+    when element(1, E) =:= element(3, E) ->
+    scan(T, S, {R, C + 2}, in_text);
+scan("%}" ++ T, S, {R, C} = P,
+     {in_endverbatim_code, E} = St)
+    when element(1, E) =:= undefined andalso
+	   element(3, E) =:= "" ->
+    scan(T, S, {R, C + 2}, in_text);
+scan([H | T], S, {R, C} = P,
+     {in_endverbatim_code, E} = St) ->
+    {Tag, Backtrack, _} = E,
+    scan(T,
+	 case S of
+	   [{string, _, L} = M | Ss] ->
+	       [setelement(3, M, [H | Backtrack] ++ L) | Ss];
+	   _ -> [{string, P, [H | Backtrack]} | S]
+	 end,
+	 case H of
+	   $\n -> {R + 1, 1};
+	   _ -> {R, C + 1}
+	 end,
+	 {in_verbatim, Tag});
+scan([H | T], S, {R, C} = P,
+     {in_verbatim_code, E} = St) ->
+    {Tag, Backtrack} = E,
+    scan(T,
+	 case S of
+	   [{string, _, L} = M | Ss] ->
+	       [setelement(3, M, [H | Backtrack] ++ L) | Ss];
+	   _ -> [{string, P, [H | Backtrack]} | S]
+	 end,
+	 case H of
+	   $\n -> {R + 1, 1};
+	   _ -> {R, C + 1}
+	 end,
+	 {in_verbatim, Tag});
+scan([H | T], S, {R, C} = P, {in_verbatim, E} = St) ->
+    scan(T,
+	 case S of
+	   [{string, _, L} = M | Ss] ->
+	       [setelement(3, M, [H | L]) | Ss];
+	   _ -> [{string, P, [H]} | S]
+	 end,
+	 case H of
+	   $\n -> {R + 1, 1};
+	   _ -> {R, C + 1}
+	 end,
+	 {in_verbatim, E});
+scan("==" ++ T, S, {R, C} = P, {_, E}) ->
+    scan(T, [{'==', P} | post_process(S, '==')], {R, C + 2},
+	 {in_code, E});
+scan("!=" ++ T, S, {R, C} = P, {_, E}) ->
+    scan(T, [{'!=', P} | post_process(S, '!=')], {R, C + 2},
+	 {in_code, E});
+scan(">=" ++ T, S, {R, C} = P, {_, E}) ->
+    scan(T, [{'>=', P} | post_process(S, '>=')], {R, C + 2},
+	 {in_code, E});
+scan("<=" ++ T, S, {R, C} = P, {_, E}) ->
+    scan(T, [{'<=', P} | post_process(S, '<=')], {R, C + 2},
+	 {in_code, E});
+scan(">" ++ T, S, {R, C} = P, {_, E}) ->
+    scan(T, [{'>', P} | post_process(S, '>')], {R, C + 1},
+	 {in_code, E});
+scan("<" ++ T, S, {R, C} = P, {_, E}) ->
+    scan(T, [{'<', P} | post_process(S, '<')], {R, C + 1},
+	 {in_code, E});
+scan("(" ++ T, S, {R, C} = P, {_, E}) ->
+    scan(T, [{'(', P} | post_process(S, '(')], {R, C + 1},
+	 {in_code, E});
+scan(")" ++ T, S, {R, C} = P, {_, E}) ->
+    scan(T, [{')', P} | post_process(S, ')')], {R, C + 1},
+	 {in_code, E});
+scan("," ++ T, S, {R, C} = P, {_, E}) ->
+    scan(T, [{',', P} | post_process(S, ',')], {R, C + 1},
+	 {in_code, E});
+scan("|" ++ T, S, {R, C} = P, {_, E}) ->
+    scan(T, [{'|', P} | post_process(S, '|')], {R, C + 1},
+	 {in_code, E});
+scan("=" ++ T, S, {R, C} = P, {_, E}) ->
+    scan(T, [{'=', P} | post_process(S, '=')], {R, C + 1},
+	 {in_code, E});
+scan(":" ++ T, S, {R, C} = P, {_, E}) ->
+    scan(T, [{':', P} | post_process(S, ':')], {R, C + 1},
+	 {in_code, E});
+scan("." ++ T, S, {R, C} = P, {_, E}) ->
+    scan(T, [{'.', P} | post_process(S, '.')], {R, C + 1},
+	 {in_code, E});
+scan("_(" ++ T, S, {R, C} = P, {_, E}) ->
+    scan(T, [{'(', P}, {'_', P} | post_process(S, '_')],
+	 {R, C + 2}, {in_code, E});
+scan(" " ++ T, S, {R, C}, {_, E}) ->
+    scan(T, S, {R, C + 1}, {in_code, E});
+scan("\r" ++ T, S, {R, C}, {_, E}) ->
+    scan(T, S, {R, C + 1}, {in_code, E});
+scan("\n" ++ T, S, {R, C}, {_, E}) ->
+    scan(T, S, {R + 1, 1}, {in_code, E});
+scan("\t" ++ T, S, {R, C}, {_, E}) ->
+    scan(T, S, {R, C + 1}, {in_code, E});
+scan([H | T], S, {R, C} = P, {in_code, E})
+    when H >= $a andalso H =< $z orelse
+	   H >= $A andalso H =< $Z orelse H == $_ ->
+    scan(T,
+	 [{identifier, P, [H]} | post_process(S, identifier)],
+	 case H of
+	   $\n -> {R + 1, 1};
+	   _ -> {R, C + 1}
+	 end,
+	 {in_identifier, E});
+scan([H | T], S, {R, C} = P, {in_code, E})
+    when H >= $0 andalso H =< $9 orelse H == $- ->
+    scan(T,
+	 [{number_literal, P, [H]} | post_process(S,
+						  number_literal)],
+	 case H of
+	   $\n -> {R + 1, 1};
+	   _ -> {R, C + 1}
+	 end,
+	 {in_number, E});
+scan([H | T], S, {R, C} = P, {in_code, E} = St) ->
+    return_error({illegal_char, H}, P, [H | T], S, St);
+scan([H | T], S, {R, C} = P, {in_number, E} = St)
+    when H >= $0 andalso H =< $9 ->
+    scan(T,
+	 case S of
+	   [{number_literal, _, L} = M | Ss] ->
+	       [setelement(3, M, [H | L]) | Ss];
+	   _ ->
+	       [{number_literal, P, [H]} | post_process(S,
+							number_literal)]
+	 end,
+	 case H of
+	   $\n -> {R + 1, 1};
+	   _ -> {R, C + 1}
+	 end,
+	 St);
+scan([H | T], S, {R, C} = P, {in_number, E} = St) ->
+    return_error({illegal_char, H}, P, [H | T], S, St);
+scan([H | T], S, {R, C} = P, {in_identifier, E})
+    when H >= $a andalso H =< $z orelse
+	   H >= $A andalso H =< $Z orelse
+	     H >= $0 andalso H =< $9 orelse H == $_ ->
+    scan(T,
+	 case S of
+	   [{identifier, _, L} = M | Ss] ->
+	       [setelement(3, M, [H | L]) | Ss];
+	   _ ->
+	       [{identifier, P, [H]} | post_process(S, identifier)]
+	 end,
+	 case H of
+	   $\n -> {R + 1, 1};
+	   _ -> {R, C + 1}
+	 end,
+	 {in_identifier, E});
+scan([H | T], S, {R, C} = P, {in_identifier, E} = St) ->
+    return_error({illegal_char, H}, P, [H | T], S, St);
+scan([], S, {R, C} = P, in_text = St) ->
+    {ok, lists:reverse(post_process(S, eof))};
+scan([], S, {R, C} = P, {in_comment, E} = St) ->
+    return_error({eof, in_comment}, P);
+scan([], S, {R, C} = P, {_, E} = St) ->
+    return_error({eof, in_code}, P).
 
-scan([H | T], Scanned, {Row, Column}, {in_identifier, Closer}) ->
-    case char_type(H) of
-        letter_underscore ->
-            scan(T, append_char(Scanned, H), {Row, Column + 1}, {in_identifier, Closer});
-        digit ->
-            scan(T, append_char(Scanned, H), {Row, Column + 1}, {in_identifier, Closer});
-        _ ->
-            {error, {Row, ?MODULE, lists:concat(["Illegal character in column ", Column])}}
-    end.
+post_process(_, {string, _, L} = T, _) ->
+    setelement(3, T, begin L1 = lists:reverse(L), L1 end);
+post_process(_, {string_literal, _, L} = T, _) ->
+    setelement(3, T, begin L1 = lists:reverse(L), L1 end);
+post_process(_, {comment_tag, _, L} = T, _) ->
+    setelement(3, T, begin L1 = lists:reverse(L), L1 end);
+post_process(_, {number_literal, _, L} = T, _) ->
+    setelement(3, T,
+	       begin
+		 L1 = lists:reverse(L), L2 = list_to_integer(L1), L2
+	       end);
+post_process(_, {open_var, _, L} = T, _) ->
+    setelement(3, T, begin L1 = to_atom(L), L1 end);
+post_process(_, {close_var, _, L} = T, _) ->
+    setelement(3, T, begin L1 = to_atom(L), L1 end);
+post_process(_, {open_tag, _, L} = T, _) ->
+    setelement(3, T, begin L1 = to_atom(L), L1 end);
+post_process(_, {close_tag, _, L} = T, _) ->
+    setelement(3, T, begin L1 = to_atom(L), L1 end);
+post_process([{open_tag, _, _} | _],
+	     {identifier, _, L} = T, close_tag) ->
+    is_keyword(all, T);
+post_process([{open_tag, _, _} | _],
+	     {identifier, _, L} = T, _) ->
+    is_keyword(open_tag, T);
+post_process([{open_var, _, _} | _],
+	     {identifier, _, L} = T, _) ->
+    setelement(3, T,
+	       begin L1 = lists:reverse(L), L2 = to_atom(L1), L2 end);
+post_process([{'.', _} | _], {identifier, _, L} = T,
+	     _) ->
+    setelement(3, T,
+	       begin L1 = lists:reverse(L), L2 = to_atom(L1), L2 end);
+post_process(_, {identifier, _, L} = T, close_tag) ->
+    is_keyword(close_tag, T);
+post_process(_, {identifier, _, L} = T, _) ->
+    is_keyword(any, T);
+post_process(_, T, _) -> T.
 
-% internal functions
-
-append_char([{Type, Pos, Chars}|Scanned], Char) ->
-    [{Type, Pos, [Char | Chars]} | Scanned].
-
-append_text_char([], {Row, Column}, Char) ->
-    [{string, {Row, Column}, [Char]}];
-append_text_char([{string, StrPos, Chars} |Scanned1], _, Char) ->
-    [{string, StrPos, [Char | Chars]} | Scanned1];
-append_text_char(Scanned, {Row, Column}, Char) ->
-    [{string, {Row, Column}, [Char]} | Scanned].
-
-char_type(C) when ((C >= $a) andalso (C =< $z)) orelse ((C >= $A) andalso (C =< $Z)) orelse (C == $_) ->
-    letter_underscore;
-char_type(C) when ((C >= $0) andalso (C =< $9)) ->
-    digit;
-char_type(_C) ->
-    undefined.
+post_process([S | Ss], N) ->
+    [post_process(Ss, S, N) | Ss];
+post_process(T, N) -> post_process(undefined, T, N).

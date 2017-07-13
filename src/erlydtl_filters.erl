@@ -36,6 +36,9 @@
 -author('emmiller@gmail.com').
 -author('drew dot gulino at google dot com').
  
+-ifdef(TEST).
+-undef(TEST).
+-endif.
 -define(TEST,"").
 %-define(NOTEST,1).
 -define(NODEBUG,1).
@@ -44,8 +47,9 @@
 -ifdef(TEST).
         -export([cast_to_float/1,cast_to_integer/1,stringformat_io/7,round/2,unjoin/2,addDefaultURI/1]).
 -endif.
- 
- 
+
+-import(erlydtl_time_compat, [monotonic_time/0, unique_integer/0]).
+
 -export([add/2,
         addslashes/1,
         capfirst/1,
@@ -53,6 +57,8 @@
         cut/2,
         date/1,
         date/2,
+        date/3,
+        date/4,
         default/2,
         default_if_none/2,
         dictsort/2,
@@ -63,6 +69,7 @@
         filesizeformat/1,
         first/1,
         fix_ampersands/1,
+        floatformat/1,
         floatformat/2,
         force_escape/1,
         format_integer/1,
@@ -107,6 +114,7 @@
         unordered_list/1,
         upper/1,
         urlencode/1,
+        urlencode/2,
         urlize/1,
         urlize/2,
         urlizetrunc/2,
@@ -152,17 +160,56 @@
 -define(SECONDS_PER_MONTH, (30 * ?SECONDS_PER_DAY)).
 -define(SECONDS_PER_YEAR, (365 * ?SECONDS_PER_DAY)).
  
-%% @doc Adds a number to the value.
-add(Input, Number) when is_binary(Input) ->
-    list_to_binary(add(binary_to_list(Input), Number));
-add(Input, Number) when is_list(Input) ->
-    integer_to_list(add(list_to_integer(Input), Number));
-add(Input, Number) when is_integer(Input) ->
-    Input + Number.
+%% @doc Adds to values
+add(LHS, RHS) when is_number(LHS), is_number(RHS) ->
+    LHS + RHS;
+add(LHS, RHS) when is_binary(LHS) ->
+    add(unicode:characters_to_list(LHS), RHS);
+add(LHS, RHS) when is_binary(RHS) ->
+    add(LHS, unicode:characters_to_list(RHS));
+add(LHS, RHS) when is_list(LHS), is_list(RHS) ->
+    case {to_numeric(LHS), to_numeric(RHS)} of
+	{{number, LHSNum}, {number, RHSNum}} ->
+	    LHSNum + RHSNum;
+	_ ->
+	    LHS ++ RHS
+    end;
+add(LHS, RHS) when is_list(LHS), is_number(RHS) ->
+    case to_numeric(LHS) of
+	{number, LHSNum} ->
+	    LHSNum + RHS;
+	_ ->
+	    LHS ++ to_string(RHS)
+    end;
+add(LHS, RHS) when is_number(LHS), is_list(RHS) ->
+    case to_numeric(RHS) of
+	{number, RHSNum} ->
+	    LHS + RHSNum;
+	_ ->
+	    to_string(LHS) ++ RHS
+    end.
+
+to_string(Num) when is_integer(Num) ->
+    integer_to_list(Num);
+to_string(Num) when is_float(Num) ->
+    float_to_list(Num).
+
+to_numeric(List) ->
+    try
+	{number, list_to_integer(List)}
+    catch
+	error:badarg ->
+	    try
+		{number, list_to_float(List)}
+	    catch
+		error:badarg ->
+		    undefined
+	    end
+    end.
  
 %% @doc Adds slashes before quotes.
 addslashes(Input) when is_binary(Input) ->
-    addslashes(binary_to_list(Input));
+    addslashes(unicode:characters_to_list(Input));
 addslashes(Input) when is_list(Input) ->
     addslashes(Input, []).
  
@@ -172,38 +219,49 @@ capfirst([H|T]) when H >= $a andalso H =< $z ->
 capfirst(Other) when is_list(Other) ->
     Other;
 capfirst(<<Byte:8/integer, Binary/binary>>) when Byte >= $a andalso Byte =< $z ->
-    [(Byte + $A - $a)|binary_to_list(Binary)];
+    [(Byte + $A - $a)|unicode:characters_to_list(Binary)];
 capfirst(Other) when is_binary(Other) ->
     Other.
  
 %% @doc Centers the value in a field of a given width.
 center(Input, Number) when is_binary(Input) ->
-    list_to_binary(center(binary_to_list(Input), Number));
+    unicode:characters_to_binary(center(unicode:characters_to_list(Input), Number));
 center(Input, Number) when is_list(Input) ->
     string:centre(Input, Number).
  
 %% @doc Removes all values of arg from the given string.
 cut(Input, Arg) when is_binary(Arg) ->
-    cut(Input, binary_to_list(Arg));
+    cut(Input, unicode:characters_to_list(Arg));
 cut(Input, Arg) when is_binary(Input) ->
-    cut(binary_to_list(Input), Arg);
+    cut(unicode:characters_to_list(Input), Arg);
 cut(Input, [Char]) when is_list(Input) ->
     cut(Input, Char, []).
  
-%% @doc Formats a date according to the default format.
+%% @doc Formats a date according to the default format. 
 date(Input) ->
     date(Input, "F j, Y").
 
 %% @doc Formats a date according to the given format.
-date(Input, FormatStr) when is_binary(Input) ->
-    list_to_binary(date(binary_to_list(Input), FormatStr));
-date({{_,_,_} = Date,{_,_,_} = Time}, FormatStr) ->
-    erlydtl_dateformat:format({Date, Time}, FormatStr);
-date({_,_,_} = Date, FormatStr) ->
-    erlydtl_dateformat:format(Date, FormatStr);
-date(Input, _FormatStr) when is_list(Input) ->
-    io:format("Unexpected date parameter : ~p~n", [Input]),
+date(Input, FormatStr)
+  when is_tuple(Input)
+       andalso (size(Input) == 2 orelse size(Input) == 3) ->
+    erlydtl_dateformat:format(Input, FormatStr);
+date(Input, _FormatStr) ->
+    io:format("Unexpected date parameter: ~p~n", [Input]),
     "".
+
+%% @doc Formats a date according to the default format 
+%%      localizing it with provided translation function.
+date(Input, TransFun, Locale) ->
+    date(Input, "F j, Y", TransFun, Locale).
+date(Input, FormatStr, TransFun, Locale)
+  when is_tuple(Input)
+       andalso (size(Input) == 2 orelse size(Input) == 3) ->
+    erlydtl_dateformat:format(Input, FormatStr, TransFun, Locale);
+date(Input, _FormatStr, _TransFun, _Locale) ->
+    io:format("Unexpected date parameter: ~p~n", [Input]),
+    "".
+
 
 %% @doc If value evaluates to `false', use given default. Otherwise, use the value.
 default(Input, Default) ->
@@ -218,10 +276,21 @@ default_if_none(undefined, Default) ->
 default_if_none(Input, _) ->
     Input.
 
-%% @doc Takes a list of dictionaries and returns that list sorted by the key given in the argument.
+%% @doc Takes a list of dictionaries or proplists and returns that list sorted by the key given in the argument.
+dictsort(DictList, Key) when is_binary(Key) ->
+    dictsort(DictList, [binary_to_atom(B,latin1) ||
+			   B <- binary:split(Key,<<".">>)]);
 dictsort(DictList, Key) ->
-    case lists:all(fun(Dict) -> dict:is_key(Key, Dict) end, DictList) of
-        true -> lists:sort(fun(K1,K2) -> dict:find(Key,K1) =< dict:find(Key,K2) end, DictList);
+    case lists:all(
+	   fun(Dict) ->
+		   erlydtl_runtime:find_deep_value(Key, Dict) /= undefined
+	   end, DictList) of
+        true ->
+	    lists:sort(
+	      fun(K1,K2) ->
+		      erlydtl_runtime:find_deep_value(Key,K1) =<
+			  erlydtl_runtime:find_deep_value(Key,K2)
+	      end, DictList);
         false -> error
     end.
 
@@ -231,11 +300,11 @@ dictsortreversed(DictList, Key) ->
 
 %% @doc Returns `true' if the value is divisible by the argument.
 divisibleby(Input, Divisor) when is_binary(Input) ->
-    divisibleby(binary_to_list(Input), Divisor);
+    divisibleby(unicode:characters_to_list(Input), Divisor);
 divisibleby(Input, Divisor) when is_list(Input) ->
     divisibleby(list_to_integer(Input), Divisor);
 divisibleby(Input, Divisor) when is_binary(Divisor) ->
-    divisibleby(Input, binary_to_list(Divisor));
+    divisibleby(Input, unicode:characters_to_list(Divisor));
 divisibleby(Input, Divisor) when is_list(Divisor) ->
     divisibleby(Input, list_to_integer(Divisor));
 divisibleby(Input, Divisor) when is_integer(Input), is_integer(Divisor) ->
@@ -243,13 +312,13 @@ divisibleby(Input, Divisor) when is_integer(Input), is_integer(Divisor) ->
 
 %% @doc Escapes characters for use in JavaScript strings.
 escapejs(Input) when is_binary(Input) ->
-    escapejs(binary_to_list(Input));
+    unicode:characters_to_binary(escapejs(unicode:characters_to_list(Input)));
 escapejs(Input) when is_list(Input) ->
     escapejs(Input, []).
 
 %% @doc Format the value like a human-readable file size.
 filesizeformat(Input) when is_binary(Input) ->
-    filesizeformat(binary_to_list(Input));
+    filesizeformat(unicode:characters_to_list(Input));
 filesizeformat(Input) when is_list(Input) ->
     filesizeformat(list_to_integer(Input));
 filesizeformat(Bytes) when is_integer(Bytes), Bytes >= ?GIGABYTE->
@@ -275,33 +344,32 @@ fix_ampersands(Input) when is_list(Input) ->
 
 %% @doc When used without an argument, rounds a floating-point number to one decimal place
 %% -- but only if there's a decimal part to be displayed
-floatformat(Number, Place) when is_binary(Number) ->
-    floatformat(binary_to_list(Number), Place);
-floatformat(Number, Place) ->
-    floatformat_io(Number, cast_to_integer(Place)).
+floatformat(Number) ->
+    floatformat(Number, []).
+
+floatformat(Number, Place)
+  when is_number(Number); is_binary(Number); is_list(Number) ->
+    floatformat_io(cast_to_float(Number), cast_to_integer(Place));
+floatformat(_, _) -> "".
 
 floatformat_io(Number, []) ->
     floatformat_io(Number, -1);
+floatformat_io(Number, 0) ->
+    hd(io_lib:format("~B", [erlang:round(Number)]));
 floatformat_io(Number, Precision) when Precision > 0 ->
-    Format = lists:flatten(io_lib:format("~~.~Bf",[Precision])),
-    [Result] = io_lib:format(Format,[Number]),
-    Result;
+    hd(io_lib:format("~.*f",[Precision, Number]));
 floatformat_io(Number, Precision) when Precision < 0 ->   
     Round = erlang:round(Number),
     RoundPrecision = round(Number, -Precision),
-    case RoundPrecision == Round of
-        true ->
-            %Format = lists:flatten(io_lib:format("~~~BB",[-Precision])),
-            [Result] = io_lib:format("~B",[Round]);
-        false ->
-            Format = lists:flatten(io_lib:format("~~.~Bf",[-Precision])),
-            [Result] = io_lib:format(Format,[RoundPrecision])
-    end,
-    Result.
+    if RoundPrecision == Round ->
+            floatformat_io(Round, 0);
+       true ->
+            floatformat_io(RoundPrecision, -Precision)
+    end.
 
 round(Number, Precision) ->
     P = math:pow(10, Precision),
-    round(Number * P) / P.
+    erlang:round(Number * P) / P.
 
 %% @doc Applies HTML escaping to a string.
 force_escape(Input) when is_list(Input) ->
@@ -327,11 +395,11 @@ format_number(Input) ->
 
 %% @doc Given a whole number, returns the requested digit, where 1 is the right-most digit.
 get_digit(Input, Digit) when is_binary(Input) ->
-    get_digit(binary_to_list(Input), Digit);
+    get_digit(unicode:characters_to_list(Input), Digit);
 get_digit(Input, Digit) when is_integer(Input) ->
     get_digit(integer_to_list(Input), Digit);
 get_digit(Input, Digit) when is_binary(Digit) ->
-    get_digit(Input, binary_to_list(Digit));
+    get_digit(Input, unicode:characters_to_list(Digit));
 get_digit(Input, Digit) when is_list(Digit) ->
     get_digit(Input, list_to_integer(Digit));
 get_digit(Input, Digit) when Digit > erlang:length(Input) ->
@@ -374,7 +442,7 @@ length_is(Input, Number) when is_list(Input), is_list(Number) ->
 
 %% @doc Replaces line breaks in plain text with appropriate HTML
 linebreaks(Input) when is_binary(Input) ->
-    linebreaks(binary_to_list(Input),[]);
+    linebreaks(unicode:characters_to_list(Input),[]);
 linebreaks(Input) ->
     linebreaks(Input,[]).
 
@@ -403,7 +471,7 @@ linebreaksbr(Input) ->
 
 %% @doc Displays text with line numbers.
 linenumbers(Input) when is_binary(Input) ->
-    linenumbers(binary_to_list(Input));
+    linenumbers(unicode:characters_to_list(Input));
 linenumbers(Input) when is_list(Input) ->
     linenumbers_io(Input, [], 1).
 
@@ -418,7 +486,7 @@ linenumbers_io([H|T], Acc, LineNumber) ->
 
 %% @doc Left-aligns the value in a field of a given width.
 ljust(Input, Number) when is_binary(Input) ->
-    list_to_binary(ljust(binary_to_list(Input), Number));
+    unicode:characters_to_binary(ljust(unicode:characters_to_list(Input), Number));
 ljust(Input, Number) when is_list(Input) ->
     string:left(Input, Number).
 
@@ -432,19 +500,19 @@ lower(Input) ->
 %% For a string, it's a list of characters.
 %% Added this for DTL compatibility, but since strings are lists in Erlang, no need for this.
 make_list(Input) when is_binary(Input) ->
-    make_list(binary_to_list(Input));
+    make_list(unicode:characters_to_list(Input));
 make_list(Input) ->
     unjoin(Input,"").
 
 %% @doc Converts a phone number (possibly containing letters) to its numerical equivalent.
 phone2numeric(Input) when is_binary(Input) ->
-    phone2numeric(binary_to_list(Input));
+    phone2numeric(unicode:characters_to_list(Input));
 phone2numeric(Input) when is_list(Input) ->
     phone2numeric(Input, []).
 
 %% @doc Returns a plural suffix if the value is not 1. By default, this suffix is 's'.
 pluralize(Number, Suffix) when is_binary(Suffix) ->
-    pluralize_io(Number, binary_to_list(Suffix) );
+    pluralize_io(Number, unicode:characters_to_list(Suffix) );
 pluralize(Number, Suffix) when is_list(Suffix) ->
     pluralize_io(Number, Suffix).
 
@@ -452,20 +520,13 @@ pluralize(Number) ->
     pluralize(Number, "s").
 
 pluralize_io(Number, Suffix) ->
-    case lists:member($, , Suffix) of
-        true ->
-            [Singular, Plural] = string:tokens(Suffix,","),
-            case Number of
-                0 -> Plural;
-                1 -> Singular;
-                _ -> Plural
-            end;
-        false ->
-            case Number of
-                0 -> Suffix;
-                1 -> [];
-                _ -> Suffix
-            end
+    [Singular, Plural] =
+        case string:tokens(Suffix,",") of
+            [P] -> ["", P];
+            [S, P|_] -> [S, P]
+        end,
+    if Number == 1; Number == "1"; Number == <<"1">> -> Singular;
+       true -> Plural
     end.
 
 %% @doc "pretty print" arbitrary data structures.  Used for debugging.
@@ -474,15 +535,15 @@ pprint(Input) ->
 
 %% @doc Returns a random item from the given list.
 random(Input) when is_list(Input) ->
-    lists:nth(random:uniform(erlang:length(Input)), Input);
+    lists:nth(uniform(erlang:length(Input)), Input);
 random(_) ->
     "".
 
 random_num(Value) ->
-    {A1,A2,A3} = now(),
-    random:seed(A1, A2, A3),
-    Rand = random:uniform(Value),
-    Rand.
+    seed(erlang:phash2([node()]),
+         monotonic_time(),
+         unique_integer()),
+    uniform(Value).
 
 %% random tags to be used when using erlydtl in testing
 random_range(Range) ->
@@ -493,14 +554,14 @@ random_range(Range) ->
 random_range(Start, End) when End >= Start ->
     %?debugFmt("Input, Start, End: ~p,~p,~p~n",[Input,Start,End]),
     Range = End - Start,
-    Rand = random:uniform(Range),
+    Rand = uniform(Range),
     Num = Rand + Start,
     lists:flatten(io_lib:format("~B",[Num])).
 
 removetags(Input, Tags) when is_binary(Input) ->
-    removetags(binary_to_list(Input), Tags);
+    removetags(unicode:characters_to_list(Input), Tags);
 removetags(Input, Tags) when is_binary(Tags) ->
-    removetags(Input, binary_to_list(Tags));
+    removetags(Input, unicode:characters_to_list(Tags));
 removetags(Input, Tags) ->
     TagList = string:tokens(Tags," "),
     TagListString = string:join(TagList,"|"),
@@ -510,13 +571,13 @@ removetags(Input, Tags) ->
 
 %% @doc Right-aligns the value in a field of a given width.
 rjust(Input, Number) when is_binary(Input) ->
-    list_to_binary(rjust(binary_to_list(Input), Number));
+    unicode:characters_to_binary(rjust(unicode:characters_to_list(Input), Number));
 rjust(Input, Number) ->
     string:right(Input, Number).
 
 %% @doc Returns a slice of the list.
 slice(Input, Index) when is_binary(Input) ->
-    erlydtl_slice:slice(binary_to_list(Input), Index);
+    erlydtl_slice:slice(unicode:characters_to_list(Input), Index);
 slice(Input, Index) when is_list(Input) ->
     erlydtl_slice:slice(Input, Index).
 
@@ -524,9 +585,9 @@ slice(Input, Index) when is_list(Input) ->
 %% ([#0-\s+]?)([0-9\*]+)?(\.?)([0-9]?)([diouxXeEfFgGcrs])
 %% @doc Returns a formatted string
 stringformat(Input, Conversion) when is_binary(Input) ->
-    stringformat(binary_to_list(Input), Conversion);
+    stringformat(unicode:characters_to_list(Input), Conversion);
 stringformat(Input, Conversion) when is_binary(Conversion) ->
-    stringformat(Input, binary_to_list(Conversion));
+    stringformat(Input, unicode:characters_to_list(Conversion));
 stringformat(Input, Conversion) ->
     ParsedConversion = re:replace(Conversion, "([\-#\+ ]?)([0-9\*]+)?(\.?)([0-9]?)([diouxXeEfFgGcrs])", "\\1 ,\\2 ,\\3 ,\\4 ,\\5 ", [{return,list}]),
     ?debugFmt("ParsedConversion: ~p~n", [ParsedConversion]),
@@ -655,7 +716,7 @@ stringformat_io(Input, Conversion, ConversionFlag, MinFieldWidth,
 
 %% @doc Strips all [X]HTML tags.
 striptags(Input) when is_binary(Input) ->
-    striptags(binary_to_list(Input));
+    striptags(unicode:characters_to_list(Input));
 striptags(Input) ->
     Regex = "(<[^>]+>)",
     Result = re:replace(Input,Regex,"", [global,{return,list}]),
@@ -667,7 +728,19 @@ cast_to_float(Input) when is_float(Input) ->
     Input;
 cast_to_float(Input) when is_integer(Input) ->
     Input + 0.0;
-cast_to_float(Input) ->
+cast_to_float(Input) when is_binary(Input) ->
+    %% be compatible with releases prior to R16B
+    case erlang:function_exported(erlang, binary_to_float, 1) of
+        true ->
+            try erlang:binary_to_float(Input)
+            catch
+                error:_Reason ->
+                    erlang:binary_to_integer(Input) + 0.0
+            end;
+        false ->
+            cast_to_float(binary_to_list(Input))
+    end;
+cast_to_float(Input) when is_list(Input) ->
     try list_to_float(Input)
     catch
         error:_Reason ->
@@ -681,7 +754,7 @@ cast_to_integer(Input) when is_integer(Input) ->
 cast_to_integer(Input) when is_float(Input) ->
     erlang:round(Input);
 cast_to_integer(Input) when is_binary(Input) ->
-    cast_to_integer(binary_to_list(Input));
+    cast_to_integer(unicode:characters_to_list(Input));
 cast_to_integer(Input) when is_list(Input)->
     case lists:member($., Input) of
         true ->
@@ -690,9 +763,14 @@ cast_to_integer(Input) when is_list(Input)->
             erlang:list_to_integer(Input)
     end.
 
+cast_to_list(Input) when is_list(Input) -> Input;
+cast_to_list(Input) when is_binary(Input) -> binary_to_list(Input);
+cast_to_list(Input) when is_atom(Input) -> atom_to_list(Input);
+cast_to_list(Input) -> hd(io_lib:format("~p", [Input])).
+
 %% @doc Converts to lowercase, removes non-word characters (alphanumerics and underscores) and converts spaces to hyphens.
 slugify(Input) when is_binary(Input) ->
-    slugify(binary_to_list(Input));
+    slugify(unicode:characters_to_list(Input));
 slugify(Input) when is_list(Input) ->
     slugify(Input, []).
 
@@ -745,33 +823,29 @@ timeuntil(Date,Comparison) ->
 
 %% @doc Converts a string into titlecase.
 title(Input) when is_binary(Input) ->
-    title(binary_to_list(Input));
+    title(unicode:characters_to_list(Input));
 title(Input) when is_list(Input) ->
-    title(Input, []).
+    title(lower(Input), []).
 
 %% @doc Truncates a string after a certain number of characters.
-truncatechars(_Input, Max) when Max =< 0 ->
-    "";
-truncatechars(Input, Max) when is_binary(Input) ->
-    list_to_binary(truncatechars(binary_to_list(Input), Max));
 truncatechars(Input, Max) ->
-    truncatechars(Input, Max, []).
+    truncatechars_io(cast_to_list(Input), Max, []).
 
 %% @doc Truncates a string after a certain number of words.
-truncatewords(_Input, Max) when Max =< 0 ->
+truncatewords(_Input, Max) when Max < 0 ->
     "";
 truncatewords(Input, Max) when is_binary(Input) ->
-    list_to_binary(truncatewords(binary_to_list(Input), Max));
+    unicode:characters_to_binary(truncatewords(unicode:characters_to_list(Input), Max));
 truncatewords(Input, Max) ->
-    truncatewords(Input, Max, []).
+    truncatewords_io(cast_to_list(Input), Max, []).
 
 %% @doc Similar to truncatewords, except that it is aware of HTML tags.
-truncatewords_html(_Input, Max) when Max =< 0 ->
+truncatewords_html(_Input, Max) when Max < 0 ->
     "";
 truncatewords_html(Input, Max) when is_binary(Input) ->
-    truncatewords_html(binary_to_list(Input), Max);
+    unicode:characters_to_binary(truncatewords_html(unicode:characters_to_list(Input), Max));
 truncatewords_html(Input, Max) ->
-    truncatewords_html(Input, Max, [], [], text).
+    truncatewords_html_io(cast_to_list(Input), Max, [], [], text).
 
 %% @doc Recursively takes a self-nested list and returns an HTML unordered list -- WITHOUT opening and closing `<ul>' tags. 
 unordered_list(List) ->
@@ -791,35 +865,36 @@ unordered_list([First|Rest], Acc) when is_list(First) ->
 
 %% @doc Converts a string into all uppercase.
 upper(Input) when is_binary(Input) ->
-    list_to_binary(upper(binary_to_list(Input)));
+    unicode:characters_to_binary(upper(unicode:characters_to_list(Input)));
 upper(Input) ->
     string:to_upper(Input).
 
 %% @doc Escapes a value for use in a URL.
-urlencode(Input) when is_binary(Input) ->
-    urlencode(Input, 0);
-urlencode(Input) when is_list(Input) ->
-    urlencode(Input, []).
+urlencode(Input) ->
+    urlencode(Input, <<"/">>).
+
+urlencode(Input, Safe) when is_binary(Input) ->
+    urlencode_io(Input, Safe, 0);
+urlencode(Input, Safe) when is_list(Input) ->
+    urlencode_io(Input, Safe, []).
 
 %% @doc Returns the number of words.
 wordcount(Input) when is_binary(Input) ->
-    wordcount(binary_to_list(Input));
+    wordcount(unicode:characters_to_list(Input));
 wordcount(Input) when is_list(Input) ->
     wordcount(Input, 0).
 
 %% @doc Wraps words at specified line length, uses `<BR/>' html tag to delimit lines
 wordwrap(Input, Number) when is_binary(Input) ->
-    wordwrap(binary_to_list(Input), Number);
+    wordwrap(unicode:characters_to_list(Input), Number);
 wordwrap(Input, Number) when is_list(Input) ->
     wordwrap(Input, [], [], 0, Number).
 
 %% @doc Given a string mapping values for true, false and (optionally) undefined, returns one of those strings according to the value.
-yesno(Bool, Choices) when is_binary(Bool) ->
-    yesno_io(binary_to_list(Bool), Choices);
 yesno(Bool, Choices) when is_binary(Choices) ->
-    yesno_io(Bool, binary_to_list(Choices));
+    yesno_io(Bool, Choices);
 yesno(Bool, Choices) when is_list(Choices) ->
-    yesno_io(Bool, Choices).
+    yesno_io(Bool, unicode:characters_to_binary(Choices)).
 
 % internal
 
@@ -866,6 +941,8 @@ escape("\"" ++ Rest, Acc) ->
     escape(Rest, lists:reverse("&quot;", Acc));
 escape("'" ++ Rest, Acc) ->
     escape(Rest, lists:reverse("&#039;", Acc));
+escape([S | Rest], Acc) when is_list(S); is_binary(S)->
+    escape(Rest, [force_escape(S) | Acc]);
 escape([C | Rest], Acc) ->
     escape(Rest, [C | Acc]).
 
@@ -909,8 +986,8 @@ iriencode([C | Rest], Acc) ->
     iriencode(Rest, [hexdigit(Lo), hexdigit(Hi), $\% | Acc]).
 
 join_io([], _Sep) -> [];
-join_io([_] = X, _Sep) -> X;
-join_io([X|T], Sep) -> [X,Sep] ++ join_io(T, Sep).
+join_io([X], _Sep) -> [format_number(X)];
+join_io([X|T], Sep) -> [format_number(X),Sep] ++ join_io(T, Sep).
 
 linebreaksbr(Input, Index) when is_binary(Input) ->
     Break = <<"<br />">>,
@@ -979,55 +1056,88 @@ title([], Acc) ->
     lists:reverse(Acc);
 title([Char | Rest], [] = Acc) when Char >= $a, Char =< $z ->
     title(Rest, [Char + ($A - $a) | Acc]);
-title([Char | Rest], [$\  |_] = Acc) when Char >= $a, Char =< $z ->
+title([Char | Rest], [Sep|[Sep2|_Other]] = Acc)
+  when Char >= $a, Char =< $z,
+       not (Sep >= $a andalso Sep =< $z),
+       not (Sep >= $A andalso Sep =< $Z),
+       not (Sep >= $0 andalso Sep =< $9),
+       not (Sep =:= $' andalso (Sep2 >= $a andalso Sep2 =< $z)) ->
     title(Rest, [Char + ($A - $a) | Acc]);
 title([Char | Rest], Acc) ->
     title(Rest, [Char | Acc]).
 
-truncatechars([], _CharsLeft, Acc) ->
+truncatechars_io([], _CharsLeft, Acc) ->
     lists:reverse(Acc);
-truncatechars(_Input, 0, Acc) ->
-    lists:reverse("..." ++ Acc);
-truncatechars([C|Rest], CharsLeft, Acc) ->
-    truncatechars(Rest, CharsLeft - 1, [C|Acc]).
+truncatechars_io(_Input, 0, Acc) ->
+    lists:reverse("..." ++ drop_chars(Acc, 3));
+truncatechars_io([C|Rest], CharsLeft, Acc) when C >= 2#11111100 ->
+    truncatechars_io(Rest, CharsLeft + 4, [C|Acc]);
+truncatechars_io([C|Rest], CharsLeft, Acc) when C >= 2#11111000 ->
+    truncatechars_io(Rest, CharsLeft + 3, [C|Acc]);
+truncatechars_io([C|Rest], CharsLeft, Acc) when C >= 2#11110000 ->
+    truncatechars_io(Rest, CharsLeft + 2, [C|Acc]);
+truncatechars_io([C|Rest], CharsLeft, Acc) when C >= 2#11100000 ->
+    truncatechars_io(Rest, CharsLeft + 1, [C|Acc]);
+truncatechars_io([C|Rest], CharsLeft, Acc) when C >= 2#11000000 ->
+    truncatechars_io(Rest, CharsLeft, [C|Acc]);
+truncatechars_io([C|Rest], CharsLeft, Acc) ->
+    truncatechars_io(Rest, CharsLeft - 1, [C|Acc]).
 
-truncatewords([], _WordsLeft, Acc) ->
-    lists:reverse(Acc);
-truncatewords(_Input, 0, Acc) ->
-    lists:reverse("..." ++ Acc);
-truncatewords([C1, C2|Rest], WordsLeft, Acc) when C1 =/= $\  andalso C2 =:= $\  ->
-    truncatewords([C2|Rest], WordsLeft - 1, [C1|Acc]);
-truncatewords([C1|Rest], WordsLeft, Acc) ->
-    truncatewords(Rest, WordsLeft, [C1|Acc]).
+drop_chars([], _) -> [];
+drop_chars(Cs, 0) -> Cs;
+drop_chars([C|Cs], Count) when C >= 2#11111100 ->
+    drop_chars(Cs, Count + 4);
+drop_chars([C|Cs], Count) when C >= 2#11111000 ->
+    drop_chars(Cs, Count + 3);
+drop_chars([C|Cs], Count) when C >= 2#11110000 ->
+    drop_chars(Cs, Count + 2);
+drop_chars([C|Cs], Count) when C >= 2#11100000 ->
+    drop_chars(Cs, Count + 1);
+drop_chars([C|Cs], Count) when C >= 2#11000000 ->
+    drop_chars(Cs, Count);
+drop_chars([_|Cs], Count) ->
+    drop_chars(Cs, Count - 1).
 
-truncatewords_html([], _WordsLeft, Acc, [], _) ->
+
+truncatewords_io([], _WordsLeft, Acc) ->
     lists:reverse(Acc);
-truncatewords_html(_Input, 0, Acc, [], _) ->
+truncatewords_io(_Input, 0, Acc) ->
+    lists:reverse("... " ++ Acc);
+truncatewords_io([C1, C2|Rest], WordsLeft, Acc) when C1 =/= $\s andalso C2 =:= $\s ->
+    truncatewords_io([C2|Rest], WordsLeft - 1, [C1|Acc]);
+truncatewords_io([C1|Rest], WordsLeft, Acc) ->
+    truncatewords_io(Rest, WordsLeft, [C1|Acc]).
+
+truncatewords_html_io([], _WordsLeft, Acc, [], _) ->
     lists:reverse(Acc);
-truncatewords_html(Input, 0, Acc, [Tag|RestOfTags], done) ->
-    truncatewords_html(Input, 0, ">"++Tag++"/<" ++ Acc, RestOfTags, done);
-truncatewords_html(Input, 0, Acc, [Tag|RestOfTags], _) ->
-    truncatewords_html(Input, 0, "...>"++Tag++"/<" ++ Acc, RestOfTags, done);
-truncatewords_html([], WordsLeft, Acc, [Tag|RestOfTags], _) ->
-    truncatewords_html([], WordsLeft, ">"++Tag++"/<" ++ Acc, RestOfTags, text);
-truncatewords_html([C|Rest], WordsLeft, Acc, Tags, text) when C =:= $< ->
-    truncatewords_html(Rest, WordsLeft, [C|Acc], [""|Tags], tag);
-truncatewords_html([C1, C2|Rest], WordsLeft, Acc, Tags, text) when C1 =/= $\ , C2 =:= $\ ; C1 =/= $\ , C2 =:= $< ->
-    truncatewords_html([C2|Rest], WordsLeft - 1, [C1|Acc], Tags, text);
-truncatewords_html([C|Rest], WordsLeft, Acc, Tags, text) ->
-    truncatewords_html(Rest, WordsLeft, [C|Acc], Tags, text);
-truncatewords_html([C|Rest], WordsLeft, Acc, [""|Tags], tag) when C =:= $/ ->
-    truncatewords_html(Rest, WordsLeft, [C|Acc], Tags, close_tag);
-truncatewords_html([C|Rest], WordsLeft, Acc, [Tag|RestOfTags], tag) when C >= $a, C =< $z; C >= $A, C =< $Z ->
-    truncatewords_html(Rest, WordsLeft, [C|Acc], [[C|Tag]|RestOfTags], tag);
-truncatewords_html([C|Rest], WordsLeft, Acc, Tags, tag) when C =:= $> ->
-    truncatewords_html(Rest, WordsLeft, [C|Acc], Tags, text);
-truncatewords_html([C|Rest], WordsLeft, Acc, Tags, tag) ->
-    truncatewords_html(Rest, WordsLeft, [C|Acc], Tags, attrs);
-truncatewords_html([C|Rest], WordsLeft, Acc, Tags, attrs) when C =:= $> ->
-    truncatewords_html(Rest, WordsLeft, [C|Acc], Tags, text);
-truncatewords_html([C|Rest], WordsLeft, Acc, [_Tag|RestOfTags], close_tag) when C =:= $> ->
-    truncatewords_html(Rest, WordsLeft, [C|Acc], RestOfTags, text).
+truncatewords_html_io(_Input, 0, Acc, [], _) ->
+    lists:reverse(Acc);
+truncatewords_html_io(Input, 0, Acc, [Tag|RestOfTags], done) ->
+    truncatewords_html_io(Input, 0, ">"++Tag++"/<" ++ Acc, RestOfTags, done);
+truncatewords_html_io(Input, 0, Acc, [Tag|RestOfTags], _) ->
+    truncatewords_html_io(Input, 0, "...>"++Tag++"/<" ++ Acc, RestOfTags, done);
+truncatewords_html_io([], WordsLeft, Acc, [Tag|RestOfTags], _) ->
+    truncatewords_html_io([], WordsLeft, ">"++Tag++"/<" ++ Acc, RestOfTags, text);
+truncatewords_html_io([C|Rest], WordsLeft, Acc, Tags, text) when C =:= $< ->
+    truncatewords_html_io(Rest, WordsLeft, [C|Acc], [""|Tags], tag);
+truncatewords_html_io([C1, C2|Rest], WordsLeft, Acc, Tags, text) when C1 =/= $\ , C2 =:= $\ ; C1 =/= $\ , C2 =:= $< ->
+    truncatewords_html_io([C2|Rest], WordsLeft - 1, [C1|Acc], Tags, text);
+truncatewords_html_io([C|Rest], WordsLeft, Acc, Tags, text) ->
+    truncatewords_html_io(Rest, WordsLeft, [C|Acc], Tags, text);
+truncatewords_html_io([C|Rest], WordsLeft, Acc, [""|Tags], tag) when C =:= $/ ->
+    truncatewords_html_io(Rest, WordsLeft, [C|Acc], Tags, close_tag);
+truncatewords_html_io([C|Rest], WordsLeft, Acc, [Tag|RestOfTags], tag) when C >= $a, C =< $z; C >= $A, C =< $Z ->
+    truncatewords_html_io(Rest, WordsLeft, [C|Acc], [[C|Tag]|RestOfTags], tag);
+truncatewords_html_io([C|Rest], WordsLeft, Acc, Tags, tag) when C =:= $> ->
+    truncatewords_html_io(Rest, WordsLeft, [C|Acc], Tags, text);
+truncatewords_html_io([C|Rest], WordsLeft, Acc, Tags, tag) ->
+    truncatewords_html_io(Rest, WordsLeft, [C|Acc], Tags, attrs);
+truncatewords_html_io([C|Rest], WordsLeft, Acc, Tags, attrs) when C =:= $> ->
+    truncatewords_html_io(Rest, WordsLeft, [C|Acc], Tags, text);
+truncatewords_html_io([C|Rest], WordsLeft, Acc, [_Tag|RestOfTags], close_tag) when C =:= $> ->
+    truncatewords_html_io(Rest, WordsLeft, [C|Acc], RestOfTags, text);
+truncatewords_html_io([C|Rest], WordsLeft, Acc, Tags, close_tag) when C =/= $> ->
+    truncatewords_html_io(Rest, WordsLeft, [C|Acc], Tags, close_tag).
 
 wordcount([], Count) ->
     Count;
@@ -1059,41 +1169,43 @@ wordwrap([C | Rest], Acc, WordAcc, LineLength, WrapAt) when erlang:length(WordAc
 wordwrap([C | Rest], Acc, WordAcc, LineLength, WrapAt) ->
     wordwrap(Rest, Acc, [C | WordAcc], LineLength, WrapAt).
 
-% Taken from quote_plus of mochiweb_util
-
-urlencode(Input, Index) when is_binary(Input) ->
+urlencode_io(Input, Safe, Index) when is_binary(Input) ->
     case Input of
         <<_:Index/binary, Byte, _/binary>> when ?NO_ENCODE(Byte) ->
-            urlencode(Input, Index + 1);
-        <<Pre:Index/binary, $\s, Post/binary>> ->
-            process_binary_match(Pre, <<"+">>, size(Post), urlencode(Post, 0));
-        <<Pre:Index/binary, Hi:4, Lo:4, Post/binary>> ->
-            HiDigit = hexdigit(Hi),
-            LoDigit = hexdigit(Lo),
-            Code = <<$\%, HiDigit, LoDigit>>,
-            process_binary_match(Pre, Code, size(Post), urlencode(Post, 0));
+            urlencode_io(Input, Safe, Index + 1);
+        <<Pre:Index/binary, C:1/binary, Post/binary>> ->
+            process_binary_match(
+              Pre, maybe_urlencode_char(C, Safe),
+              size(Post), urlencode_io(Post, Safe, 0));
         Input ->
             Input
     end;
-urlencode([], Acc) ->
+urlencode_io([], _Safe, Acc) ->
     lists:reverse(Acc);
-urlencode([C | Rest], Acc) when ?NO_ENCODE(C) ->
-    urlencode(Rest, [C | Acc]);
-urlencode([$\s | Rest], Acc) ->
-    urlencode(Rest, [$+ | Acc]);
-urlencode([C | Rest], Acc) ->
-    <<Hi:4, Lo:4>> = <<C>>,
-    urlencode(Rest, [hexdigit(Lo), hexdigit(Hi), $\% | Acc]).
+urlencode_io([C | Rest], Safe, Acc) when ?NO_ENCODE(C) ->
+    urlencode_io(Rest, Safe, [C | Acc]);
+urlencode_io([C | Rest], Safe, Acc) ->
+    urlencode_io(Rest, Safe, [maybe_urlencode_char(<<C>>, Safe) | Acc]).
+
+maybe_urlencode_char(C, Safe) ->
+    case binary:match(Safe, C) of
+        nomatch ->
+            <<Hi:4, Lo:4>> = C,
+            HiDigit = hexdigit(Hi),
+            LoDigit = hexdigit(Lo),
+            <<$%, HiDigit, LoDigit>>;
+        _ -> C
+    end.
 
 %% @doc Converts URLs in text into clickable links.
 %%TODO: Autoescape not yet implemented
 urlize(Input) when is_binary(Input) ->
-    urlize(binary_to_list(Input),0);
+    urlize(unicode:characters_to_list(Input),0);
 urlize(Input) ->
     urlize(Input,0).
 
 urlize(Input, Trunc) when is_binary(Input) ->
-    urlize(binary_to_list(Input),Trunc);
+    urlize(unicode:characters_to_list(Input),Trunc);
 urlize(Input, Trunc) ->
     {ok,RE} = re:compile("(([[:alpha:]]+://|www\.)[^<>[:space:]]+[[:alnum:]/])"),
     RegexResult = re:run(Input,RE,[global]),
@@ -1141,20 +1253,21 @@ process_binary_match(Pre, Insertion, SizePost, Post) ->
         _ -> [Pre, Insertion, Post]
     end.
 
-yesno_io(Bool, Choices) ->
-    %%       io:format("Bool, Choices: ~p, ~p ~n",[Bool, Choices]),
-    Terms = string:tokens(Choices, ","),
-    case Bool of
-        true ->
-            lists:nth(1, Terms);
-        false ->
-            lists:nth(2, Terms);
-        undefined when erlang:length(Terms) == 2 -> % (converts undefined to false if no mapping for undefined is given)
-            lists:nth(2, Terms);
-        undefined when erlang:length(Terms) == 3 ->
-            lists:nth(3, Terms);
-        _ ->
-            error
+yesno_io(Val, Choices) ->
+    {True, False, Undefined} =
+        case binary:split(Choices, <<",">>, [global]) of
+            [T, F, U] -> {T, F, U};
+            [T, F] -> {T, F, F};
+            _ -> throw({yesno, choices})
+        end,
+    if Val =:= false -> False;
+       Val =:= undefined -> Undefined;
+           is_list(Val); is_binary(Val) ->
+                case iolist_size(Val) of
+                    0 -> False;
+                    _ -> True
+                end;
+       true -> True
     end.
 
 %% unjoin == split in other languages; inverse of join
@@ -1207,3 +1320,20 @@ unjoin2_loop([], _, _, _, Rev) ->
 unjoin_prefix([C|L], [C|S]) -> unjoin_prefix(L, S);
 unjoin_prefix([],    S)     -> S;
 unjoin_prefix(_,     _)     -> no.
+
+%% random compatibility
+%% Credits: https://github.com/benoitc/hackney/blob/master/src/hackney_util.erl
+
+uniform(N) ->
+    case have_rand() of
+        true  -> rand:uniform(N);
+        false -> (fun random:uniform/1)(N)
+    end.
+
+seed(A0, A1, A2) ->
+    case have_rand() of
+        true -> rand:seed(exsplus, {A0, A1, A2});
+        false -> (fun random:seed/3)(A0, A1, A2)
+    end.
+
+have_rand() -> (code:which(rand) /= non_existing).
